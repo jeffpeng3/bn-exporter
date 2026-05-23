@@ -1,0 +1,12 @@
+[project]
+name = "bn-exporter"
+version = "0.1.0"
+requires-python = ">=3.13"
+dependencies = [
+    "prometheus-client[aiohttp]",
+    "python-binance>=1.0.36",
+    "python-dotenv>=1.2.2",
+]
+
+[tool.uv.sources]
+prometheus-client = { git = "https://github.com/prometheus/client_python.git" }
