@@ -1,12 +1,148 @@
+import asyncio
 import os
 from dotenv import load_dotenv
 from aiohttp import web
+from prometheus_client import Gauge
 from prometheus_client.aiohttp import make_aiohttp_handler
+
+import parser as bnparser
 
 load_dotenv()
 
+BALANCE_TOTAL = Gauge("binance_balance_total_usdt", "Total Binance account balance in USDT")
+BALANCE_ASSET = Gauge("binance_balance_asset_usdt", "Binance asset value in USDT", ["asset"])
+BALANCE_MISSING = Gauge("binance_balance_asset_price_missing", "Whether an asset price is missing", ["asset"])
+AUTO_INVEST_ACTIVE_PLANS = Gauge("binance_auto_invest_active_plans", "Number of active Binance auto-invest plans")
+AUTO_INVEST_PLAN_VALUE = Gauge("binance_auto_invest_plan_value_usd", "Auto-invest plan current value in USD", ["plan_id"])
+AUTO_INVEST_PLAN_INVESTED = Gauge("binance_auto_invest_plan_invested_usd", "Auto-invest plan total invested in USD", ["plan_id"])
+AUTO_INVEST_PLAN_PNL = Gauge("binance_auto_invest_plan_pnl_usd", "Auto-invest plan profit and loss in USD", ["plan_id"])
+AUTO_INVEST_PLAN_ROI = Gauge("binance_auto_invest_plan_roi", "Auto-invest plan ROI", ["plan_id"])
+AUTO_INVEST_PLAN_ASSET_INVESTED = Gauge("binance_auto_invest_plan_asset_invested_usd", "Auto-invest plan asset invested amount in USD", ["plan_id", "asset"])
+AUTO_INVEST_PLAN_ASSET_PNL = Gauge("binance_auto_invest_plan_asset_pnl_usd", "Auto-invest plan asset PnL in USD", ["plan_id", "asset"])
+AUTO_INVEST_PLAN_ASSET_ROI = Gauge("binance_auto_invest_plan_asset_roi", "Auto-invest plan asset ROI", ["plan_id", "asset"])
+AUTO_INVEST_PLAN_ASSET_PERCENT = Gauge("binance_auto_invest_plan_asset_percentage", "Auto-invest plan asset target percentage", ["plan_id", "asset"])
+
 app = web.Application()
 app.router.add_get("/metrics", make_aiohttp_handler())
+
+LAST_BALANCE_ASSETS = set()
+LAST_MISSING_ASSETS = set()
+LAST_PLAN_IDS = set()
+LAST_PLAN_ASSETS = set()
+
+
+def parse_float(value):
+    try:
+        return float(value)
+    except (ValueError, TypeError):
+        return 0.0
+
+
+def update_metrics():
+    client = bnparser.load_client()
+    prices = bnparser.build_price_map(client)
+    balances = bnparser.load_balances(client)
+
+    total_value, rows, missing = bnparser.calculate_total_value(balances, prices, "USDT")
+    BALANCE_TOTAL.set(total_value)
+
+    current_balance_assets = set()
+    for asset, amount, price, value in rows:
+        BALANCE_ASSET.labels(asset=asset).set(value)
+        current_balance_assets.add(asset)
+
+    for old_asset in LAST_BALANCE_ASSETS - current_balance_assets:
+        try:
+            BALANCE_ASSET.remove(asset=old_asset)
+        except KeyError:
+            pass
+    LAST_BALANCE_ASSETS.clear()
+    LAST_BALANCE_ASSETS.update(current_balance_assets)
+
+    current_missing_assets = set()
+    for asset in missing:
+        BALANCE_MISSING.labels(asset=asset).set(1)
+        current_missing_assets.add(asset)
+
+    for old_asset in LAST_MISSING_ASSETS - current_missing_assets:
+        try:
+            BALANCE_MISSING.remove(asset=old_asset)
+        except KeyError:
+            pass
+    LAST_MISSING_ASSETS.clear()
+    LAST_MISSING_ASSETS.update(current_missing_assets)
+
+    plans, _ = bnparser.load_auto_invest_status(client)
+    current_plan_ids = set()
+    current_plan_assets = set()
+
+    if plans is not None:
+        AUTO_INVEST_ACTIVE_PLANS.set(len(plans))
+        for plan in plans:
+            plan_id = str(plan.get("planId", "unknown"))
+            current_plan_ids.add(plan_id)
+            AUTO_INVEST_PLAN_VALUE.labels(plan_id=plan_id).set(parse_float(plan.get("planValueInUSD")))
+            AUTO_INVEST_PLAN_INVESTED.labels(plan_id=plan_id).set(parse_float(plan.get("totalInvestedInUSD")))
+            AUTO_INVEST_PLAN_PNL.labels(plan_id=plan_id).set(parse_float(plan.get("pnlInUSD")))
+            AUTO_INVEST_PLAN_ROI.labels(plan_id=plan_id).set(parse_float(plan.get("roi")))
+
+            details = bnparser.load_auto_invest_plan_details(client, plan.get("planId"))
+            for detail in details:
+                asset_label = detail.get("targetAsset", "unknown")
+                current_plan_assets.add((plan_id, asset_label))
+                AUTO_INVEST_PLAN_ASSET_INVESTED.labels(plan_id=plan_id, asset=asset_label).set(parse_float(detail.get("totalInvestedInUSD")))
+                AUTO_INVEST_PLAN_ASSET_PNL.labels(plan_id=plan_id, asset=asset_label).set(parse_float(detail.get("pnlInUSD")))
+                AUTO_INVEST_PLAN_ASSET_ROI.labels(plan_id=plan_id, asset=asset_label).set(parse_float(detail.get("roi")))
+                AUTO_INVEST_PLAN_ASSET_PERCENT.labels(plan_id=plan_id, asset=asset_label).set(parse_float(detail.get("percentage")))
+
+    for old_plan_id in LAST_PLAN_IDS - current_plan_ids:
+        try:
+            AUTO_INVEST_PLAN_VALUE.remove(plan_id=old_plan_id)
+            AUTO_INVEST_PLAN_INVESTED.remove(plan_id=old_plan_id)
+            AUTO_INVEST_PLAN_PNL.remove(plan_id=old_plan_id)
+            AUTO_INVEST_PLAN_ROI.remove(plan_id=old_plan_id)
+        except KeyError:
+            pass
+    LAST_PLAN_IDS.clear()
+    LAST_PLAN_IDS.update(current_plan_ids)
+
+    for old_plan_id, old_asset in LAST_PLAN_ASSETS - current_plan_assets:
+        try:
+            AUTO_INVEST_PLAN_ASSET_INVESTED.remove(plan_id=old_plan_id, asset=old_asset)
+            AUTO_INVEST_PLAN_ASSET_PNL.remove(plan_id=old_plan_id, asset=old_asset)
+            AUTO_INVEST_PLAN_ASSET_ROI.remove(plan_id=old_plan_id, asset=old_asset)
+            AUTO_INVEST_PLAN_ASSET_PERCENT.remove(plan_id=old_plan_id, asset=old_asset)
+        except KeyError:
+            pass
+    LAST_PLAN_ASSETS.clear()
+    LAST_PLAN_ASSETS.update(current_plan_assets)
+
+
+async def exporter_loop(app: web.Application):
+    while True:
+        try:
+            await asyncio.to_thread(update_metrics)
+        except Exception as exc:
+            print(f"Exporter update error: {exc}")
+        await asyncio.sleep(60)
+
+
+async def start_background_tasks(app: web.Application):
+    app["exporter_task"] = asyncio.create_task(exporter_loop(app))
+
+
+async def cleanup_background_tasks(app: web.Application):
+    task = app.get("exporter_task")
+    if task:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+
+app.on_startup.append(start_background_tasks)
+app.on_cleanup.append(cleanup_background_tasks)
 
 if __name__ == "__main__":
     web.run_app(app, host="0.0.0.0", port=int(os.getenv("PORT", "8080")))

@@ -215,7 +215,7 @@ def main():
     plans, plan_summary = load_auto_invest_status(client)
     if plan_summary is not None:
         print("\nAuto-invest summary:")
-        print(f"- Active plans: {len(plans)}")
+        print(f"- Active plans: {len(plans)}") # type: ignore
         print(f"- Total plan value: ${plan_summary['planValueInUSD']:.2f} ({plan_summary['planValueInBTC']:.8f} BTC)")
         print(f"- PnL: ${plan_summary['pnlInUSD']:.2f}")
         print(f"- ROI: {plan_summary['roi']:.4f}")
