@@ -1,5 +1,6 @@
 import argparse
 import os
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 
 from binance.client import Client
@@ -115,6 +116,35 @@ def load_balances(client):
     return balances
 
 
+def format_ms(ms):
+    if not ms:
+        return "N/A"
+    return datetime.fromtimestamp(int(ms) / 1000, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+
+def load_auto_invest_status(client):
+    try:
+        response = client.margin_v1_get_lending_auto_invest_plan_list()
+        plans = response.get("plans", [])
+        summary = {
+            "planValueInUSD": parse_decimal(response.get("planValueInUSD", "0")),
+            "planValueInBTC": parse_decimal(response.get("planValueInBTC", "0")),
+            "pnlInUSD": parse_decimal(response.get("pnlInUSD", "0")),
+            "roi": Decimal(str(response.get("roi", "0"))) if response.get("roi") is not None else Decimal(0),
+        }
+        return plans, summary
+    except Exception:
+        return None, None
+
+
+def load_auto_invest_plan_details(client, plan_id):
+    try:
+        response = client.margin_v1_get_lending_auto_invest_plan_id(planId=plan_id)
+        return response.get("details", [])
+    except Exception:
+        return []
+
+
 def calculate_total_value(balances, prices, quote_asset):
     total_value = Decimal(0)
     rows = []
@@ -181,6 +211,49 @@ def main():
         print(f"Total balance in {quote_asset}: {total_value:.2f}")
 
     print(f"Assets with non-zero balance: {len(balances)}")
+
+    plans, plan_summary = load_auto_invest_status(client)
+    if plan_summary is not None:
+        print("\nAuto-invest summary:")
+        print(f"- Active plans: {len(plans)}")
+        print(f"- Total plan value: ${plan_summary['planValueInUSD']:.2f} ({plan_summary['planValueInBTC']:.8f} BTC)")
+        print(f"- PnL: ${plan_summary['pnlInUSD']:.2f}")
+        print(f"- ROI: {plan_summary['roi']:.4f}")
+        if plans:
+            print("\nAuto-invest plans:")
+            for plan in plans:
+                plan_id = plan.get("planId", "N/A")
+                status = plan.get("status", "N/A")
+                source_asset = plan.get("sourceAsset", "N/A")
+                target_asset = plan.get("targetAsset", "N/A")
+                subscription_amount = plan.get("subscriptionAmount", "N/A")
+                subscription_cycle = plan.get("subscriptionCycle", "N/A")
+                next_execution = format_ms(plan.get("nextExecutionDateTime"))
+                total_invested = parse_decimal(plan.get("totalInvestedInUSD", "0"))
+                plan_value = parse_decimal(plan.get("planValueInUSD", "0"))
+                print(
+                    f"- planId {plan_id}: {status} | {source_asset} -> {target_asset} | "
+                    f"{subscription_amount} per {subscription_cycle} | next: {next_execution} | "
+                    f"invested: ${total_invested:.2f} | value: ${plan_value:.2f}"
+                )
+                details = load_auto_invest_plan_details(client, plan_id)
+                if details:
+                    print("  Plan assets:")
+                    for detail in details:
+                        target = detail.get("targetAsset", "N/A")
+                        avg_price = parse_decimal(detail.get("averagePriceInUSD", "0"))
+                        total_invested_asset = parse_decimal(detail.get("totalInvestedInUSD", "0"))
+                        purchased = detail.get("purchasedAmount", "N/A")
+                        purchased_unit = detail.get("purchasedAmountUnit", "N/A")
+                        pnl = parse_decimal(detail.get("pnlInUSD", "0"))
+                        roi = Decimal(str(detail.get("roi", "0"))) if detail.get("roi") is not None else Decimal(0)
+                        percent = detail.get("percentage", "N/A")
+                        asset_status = detail.get("assetStatus", "N/A")
+                        print(
+                            f"    - {target}: {purchased} {purchased_unit} | avg ${avg_price:.2f} | invested ${total_invested_asset:.2f} | pnl ${pnl:.2f} | roi {roi:.4f} | {percent}% | {asset_status}"
+                        )
+                else:
+                    print("  No plan asset details available.")
 
     if args.detail:
         print("\nAsset details:")
