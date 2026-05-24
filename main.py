@@ -53,7 +53,7 @@ def update_metrics():
 
     for old_asset in LAST_BALANCE_ASSETS - current_balance_assets:
         try:
-            BALANCE_ASSET.remove(asset=old_asset)
+            BALANCE_ASSET.remove(old_asset)
         except KeyError:
             pass
     LAST_BALANCE_ASSETS.clear()
@@ -66,7 +66,7 @@ def update_metrics():
 
     for old_asset in LAST_MISSING_ASSETS - current_missing_assets:
         try:
-            BALANCE_MISSING.remove(asset=old_asset)
+            BALANCE_MISSING.remove(old_asset)
         except KeyError:
             pass
     LAST_MISSING_ASSETS.clear()
@@ -97,10 +97,10 @@ def update_metrics():
 
     for old_plan_id in LAST_PLAN_IDS - current_plan_ids:
         try:
-            AUTO_INVEST_PLAN_VALUE.remove(plan_id=old_plan_id)
-            AUTO_INVEST_PLAN_INVESTED.remove(plan_id=old_plan_id)
-            AUTO_INVEST_PLAN_PNL.remove(plan_id=old_plan_id)
-            AUTO_INVEST_PLAN_ROI.remove(plan_id=old_plan_id)
+            AUTO_INVEST_PLAN_VALUE.remove(old_plan_id)
+            AUTO_INVEST_PLAN_INVESTED.remove(old_plan_id)
+            AUTO_INVEST_PLAN_PNL.remove(old_plan_id)
+            AUTO_INVEST_PLAN_ROI.remove(old_plan_id)
         except KeyError:
             pass
     LAST_PLAN_IDS.clear()
@@ -108,10 +108,10 @@ def update_metrics():
 
     for old_plan_id, old_asset in LAST_PLAN_ASSETS - current_plan_assets:
         try:
-            AUTO_INVEST_PLAN_ASSET_INVESTED.remove(plan_id=old_plan_id, asset=old_asset)
-            AUTO_INVEST_PLAN_ASSET_PNL.remove(plan_id=old_plan_id, asset=old_asset)
-            AUTO_INVEST_PLAN_ASSET_ROI.remove(plan_id=old_plan_id, asset=old_asset)
-            AUTO_INVEST_PLAN_ASSET_PERCENT.remove(plan_id=old_plan_id, asset=old_asset)
+            AUTO_INVEST_PLAN_ASSET_INVESTED.remove(old_plan_id, old_asset)
+            AUTO_INVEST_PLAN_ASSET_PNL.remove(old_plan_id, old_asset)
+            AUTO_INVEST_PLAN_ASSET_ROI.remove(old_plan_id, old_asset)
+            AUTO_INVEST_PLAN_ASSET_PERCENT.remove(old_plan_id, old_asset)
         except KeyError:
             pass
     LAST_PLAN_ASSETS.clear()
