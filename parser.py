@@ -35,19 +35,22 @@ def build_price_map(client):
     return {ticker["symbol"]: parse_decimal(ticker["price"]) for ticker in tickers}
 
 
+STABLE_ASSET_MAP = {
+    "RWUSD": "USDC",
+    "USD": "USDC",
+}
+
+
 def normalize_asset(asset):
-    if asset == "RWUSD":
-        return "USDC"
+    asset = str(asset).upper()
     if asset.startswith("LD") and len(asset) > 2:
-        return asset[2:]
-    return asset
+        asset = asset[2:]
+    return STABLE_ASSET_MAP.get(asset, asset)
 
 
 def quote_price(asset, quote_asset, prices):
     asset = normalize_asset(asset)
-
-    if asset == "USD":
-        return quote_price("USDC", quote_asset, prices)
+    quote_asset = normalize_asset(quote_asset)
 
     if asset == quote_asset:
         return Decimal(1)
@@ -60,9 +63,6 @@ def quote_price(asset, quote_asset, prices):
 
     if reverse in prices and prices[reverse] > 0:
         return Decimal(1) / prices[reverse]
-
-    if asset in prices and asset.endswith(quote_asset):
-        return prices[asset]
 
     for bridge in PRICE_BRIDGES:
         if bridge == asset or bridge == quote_asset:
@@ -82,11 +82,8 @@ def quote_price(asset, quote_asset, prices):
         if asset_bridge in prices and quote_bridge in prices and prices[quote_bridge] > 0:
             return prices[asset_bridge] / prices[quote_bridge]
 
-        if bridge_asset in prices and quote_bridge in prices:
+        if bridge_asset in prices and quote_bridge in prices and prices[bridge_asset] > 0:
             return (Decimal(1) / prices[bridge_asset]) / prices[quote_bridge]
-
-    if asset in prices:
-        return prices[asset]
 
     return None
 
