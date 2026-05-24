@@ -43,6 +43,7 @@ STABLE_ASSET_MAP = {
 
 def normalize_asset(asset):
     asset = str(asset).upper()
+    # Binance may report locked savings / staking assets with an LD prefix.
     if asset.startswith("LD") and len(asset) > 2:
         asset = asset[2:]
     return STABLE_ASSET_MAP.get(asset, asset)
@@ -198,11 +199,17 @@ def main():
 
     total_value, rows, missing = calculate_total_value(balances, prices, quote_asset)
 
-    if missing and snapshot_total_value is not None:
-        print(
-            f"Total balance in {quote_asset} (snapshot fallback): {snapshot_total_value:.2f}"
-        )
-        print("Note: some assets could not be priced individually, using Binance account snapshot for the full balance.")
+    if missing:
+        print(f"Priced total balance in {quote_asset}: {total_value:.2f}")
+        if snapshot_total_value is not None:
+            print(
+                f"Snapshot fallback total in {quote_asset}: {snapshot_total_value:.2f}"
+            )
+            print(
+                "Note: some assets could not be priced individually; snapshot fallback is shown for reference."
+            )
+        else:
+            print("Note: some assets could not be priced individually.")
     else:
         print(f"Total balance in {quote_asset}: {total_value:.2f}")
 
