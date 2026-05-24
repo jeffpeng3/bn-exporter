@@ -1,7 +1,7 @@
 import argparse
 import os
 from datetime import datetime, timezone
-from decimal import Decimal, InvalidOperation
+from typing import TypedDict
 
 from binance.client import Client
 from dotenv import load_dotenv
@@ -12,17 +12,18 @@ API_KEY = os.getenv("BINANCE_API_KEY")
 API_SECRET = os.getenv("BINANCE_API_SECRET")
 DEFAULT_QUOTE = "USDT"
 PRICE_BRIDGES = ("USDT", "BUSD", "USDC", "BTC", "ETH", "BNB")
+API_PAGE_SIZE = 100
 # PRICE_BRIDGES 是用來當作間接換匯的橋樑資產，當沒有直接交易對時會嘗試透過這些資產計算價格。
 
 
-def parse_decimal(value):
+def parse_float(value: object) -> float:
     try:
-        return Decimal(str(value))
-    except (InvalidOperation, TypeError, ValueError):
-        return Decimal(0)
+        return float(str(value))
+    except (TypeError, ValueError):
+        return 0.0
 
 
-def load_client():
+def load_client() -> Client:
     if not API_KEY or not API_SECRET:
         raise SystemExit(
             "Missing Binance credentials. Set BINANCE_API_KEY and BINANCE_API_SECRET in environment or .env."
@@ -30,9 +31,9 @@ def load_client():
     return Client(API_KEY, API_SECRET)
 
 
-def build_price_map(client):
+def build_price_map(client: Client) -> dict[str, float]:
     tickers = client.get_all_tickers()
-    return {ticker["symbol"]: parse_decimal(ticker["price"]) for ticker in tickers}
+    return {ticker["symbol"]: parse_float(ticker["price"]) for ticker in tickers}
 
 
 STABLE_ASSET_MAP = {
@@ -41,7 +42,7 @@ STABLE_ASSET_MAP = {
 }
 
 
-def normalize_asset(asset):
+def normalize_asset(asset: object) -> str:
     asset = str(asset).upper()
     # Binance may report locked savings / staking assets with an LD prefix.
     if asset.startswith("LD") and len(asset) > 2:
@@ -49,12 +50,12 @@ def normalize_asset(asset):
     return STABLE_ASSET_MAP.get(asset, asset)
 
 
-def quote_price(asset, quote_asset, prices):
+def quote_price(asset: object, quote_asset: object, prices: dict[str, float]) -> float | None:
     asset = normalize_asset(asset)
     quote_asset = normalize_asset(quote_asset)
 
     if asset == quote_asset:
-        return Decimal(1)
+        return 1.0
 
     direct = f"{asset}{quote_asset}"
     reverse = f"{quote_asset}{asset}"
@@ -63,7 +64,7 @@ def quote_price(asset, quote_asset, prices):
         return prices[direct]
 
     if reverse in prices and prices[reverse] > 0:
-        return Decimal(1) / prices[reverse]
+        return 1.0 / prices[reverse]
 
     for bridge in PRICE_BRIDGES:
         if bridge == asset or bridge == quote_asset:
@@ -78,63 +79,135 @@ def quote_price(asset, quote_asset, prices):
             return prices[asset_bridge] * prices[bridge_quote]
 
         if bridge_asset in prices and bridge_quote in prices and prices[bridge_asset] > 0:
-            return (Decimal(1) / prices[bridge_asset]) * prices[bridge_quote]
+            return (1.0 / prices[bridge_asset]) * prices[bridge_quote]
 
         if asset_bridge in prices and quote_bridge in prices and prices[quote_bridge] > 0:
             return prices[asset_bridge] / prices[quote_bridge]
 
         if bridge_asset in prices and quote_bridge in prices and prices[bridge_asset] > 0:
-            return (Decimal(1) / prices[bridge_asset]) / prices[quote_bridge]
+            return (1.0 / prices[bridge_asset]) / prices[quote_bridge]
 
     return None
 
 
-def get_snapshot_total_btc(client):
+def get_snapshot_total_btc(client: Client) -> float | None:
     try:
         snapshot = client.get_account_snapshot(type="SPOT", size=1)
         snapshot_vos = snapshot.get("snapshotVos", [])
         if not snapshot_vos:
             return None
         total_btc = snapshot_vos[0].get("data", {}).get("totalAssetOfBtc")
-        return parse_decimal(total_btc) if total_btc else None
+        return parse_float(total_btc) if total_btc else None
     except Exception:
         return None
 
 
-def load_balances(client):
+def _normalize_earn_position_asset(asset: object) -> str:
+    asset = str(asset).upper()
+    return asset if asset.startswith("LD") else f"LD{asset}"
+
+
+def _load_simple_earn_flexible_positions(client: Client) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    current = 1
+    while True:
+        response = client.get_simple_earn_flexible_product_position(current=current, size=API_PAGE_SIZE)
+        page_rows = response.get("rows", [])
+        if not page_rows:
+            break
+        rows.extend(page_rows)
+        total = int(str(response.get("total", 0) or 0))
+        if current * API_PAGE_SIZE >= total:
+            break
+        current += 1
+    return rows
+
+
+def _load_simple_earn_locked_positions(client: Client) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    current = 1
+    while True:
+        response = client.get_simple_earn_locked_product_position(current=current, size=API_PAGE_SIZE)
+        page_rows = response.get("rows", [])
+        if not page_rows:
+            break
+        rows.extend(page_rows)
+        total = int(str(response.get("total", 0) or 0))
+        if current * API_PAGE_SIZE >= total:
+            break
+        current += 1
+    return rows
+
+
+class AssetBalance(TypedDict):
+    asset: str
+    total: float
+
+
+def _build_earn_balances(rows: list[dict[str, object]]) -> list[AssetBalance]:
+    balances: dict[str, float] = {}
+    for item in rows:
+        asset_value = item.get("asset")
+        asset = str(asset_value or "")
+        total_amount = parse_float(item.get("totalAmount"))
+        if not asset or total_amount <= 0:
+            continue
+        asset_label = _normalize_earn_position_asset(asset)
+        balances[asset_label] = balances.get(asset_label, 0.0) + total_amount
+    return [{"asset": asset, "total": total} for asset, total in balances.items()]
+
+
+def load_balances(client: Client) -> list[AssetBalance]:
     account = client.get_account()
-    balances = []
+    balances_by_asset: dict[str, float] = {}
     for item in account.get("balances", []):
-        free = parse_decimal(item.get("free"))
-        locked = parse_decimal(item.get("locked"))
+        free = parse_float(item.get("free"))
+        locked = parse_float(item.get("locked"))
         total = free + locked
-        if total > 0:
-            balances.append({"asset": item["asset"], "total": total})
-    return balances
+        asset = str(item.get("asset", ""))
+        if asset and total > 0:
+            balances_by_asset[asset] = balances_by_asset.get(asset, 0.0) + total
+
+    try:
+        flexible_rows = _load_simple_earn_flexible_positions(client)
+        for record in _build_earn_balances(flexible_rows):
+            balances_by_asset[record["asset"]] = record["total"]
+    except Exception:
+        pass
+
+    try:
+        locked_rows = _load_simple_earn_locked_positions(client)
+        for record in _build_earn_balances(locked_rows):
+            balances_by_asset[record["asset"]] = balances_by_asset.get(record["asset"], 0.0) + record["total"]
+    except Exception:
+        pass
+
+    return [{"asset": asset, "total": total} for asset, total in balances_by_asset.items()]
 
 
-def format_ms(ms):
+def format_ms(ms: object | None) -> str:
     if not ms:
         return "N/A"
-    return datetime.fromtimestamp(int(ms) / 1000, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    timestamp_ms = parse_float(ms)
+    return datetime.fromtimestamp(timestamp_ms / 1000, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
 
-def load_auto_invest_status(client):
+def load_auto_invest_status(client: Client) -> tuple[list[dict[str, object]] | None, dict[str, float] | None]:
     try:
         response = client.margin_v1_get_lending_auto_invest_plan_list()
         plans = response.get("plans", [])
         summary = {
-            "planValueInUSD": parse_decimal(response.get("planValueInUSD", "0")),
-            "planValueInBTC": parse_decimal(response.get("planValueInBTC", "0")),
-            "pnlInUSD": parse_decimal(response.get("pnlInUSD", "0")),
-            "roi": Decimal(str(response.get("roi", "0"))) if response.get("roi") is not None else Decimal(0),
+            "planValueInUSD": parse_float(response.get("planValueInUSD", "0")),
+            "planValueInBTC": parse_float(response.get("planValueInBTC", "0")),
+            "pnlInUSD": parse_float(response.get("pnlInUSD", "0")),
+            "roi": parse_float(response.get("roi", "0")) if response.get("roi") is not None else 0.0,
         }
         return plans, summary
     except Exception:
         return None, None
 
 
-def load_auto_invest_plan_details(client, plan_id):
+def load_auto_invest_plan_details(client: Client, plan_id: object) -> list[dict[str, object]]:
     try:
         response = client.margin_v1_get_lending_auto_invest_plan_id(planId=plan_id)
         return response.get("details", [])
@@ -142,10 +215,14 @@ def load_auto_invest_plan_details(client, plan_id):
         return []
 
 
-def calculate_total_value(balances, prices, quote_asset):
-    total_value = Decimal(0)
-    rows = []
-    missing = []
+def calculate_total_value(
+    balances: list[AssetBalance],
+    prices: dict[str, float],
+    quote_asset: str,
+) -> tuple[float, list[tuple[str, float, float, float]], list[str]]:
+    total_value = 0.0
+    rows: list[tuple[str, float, float, float]] = []
+    missing: list[str] = []
 
     for balance in balances:
         asset = balance["asset"]
@@ -163,15 +240,16 @@ def calculate_total_value(balances, prices, quote_asset):
     return total_value, rows, missing
 
 
-def convert_btc_snapshot(snapshot_btc, quote_asset, prices):
+def convert_btc_snapshot(snapshot_btc: object, quote_asset: str, prices: dict[str, float]) -> float | None:
     if snapshot_btc is None:
         return None
+    btc_value = parse_float(snapshot_btc)
     if quote_asset == "BTC":
-        return snapshot_btc
+        return btc_value
     btc_price = quote_price("BTC", quote_asset, prices)
     if btc_price is None:
         return None
-    return snapshot_btc * btc_price
+    return btc_value * btc_price
 
 
 def main():
@@ -232,8 +310,8 @@ def main():
                 subscription_amount = plan.get("subscriptionAmount", "N/A")
                 subscription_cycle = plan.get("subscriptionCycle", "N/A")
                 next_execution = format_ms(plan.get("nextExecutionDateTime"))
-                total_invested = parse_decimal(plan.get("totalInvestedInUSD", "0"))
-                plan_value = parse_decimal(plan.get("planValueInUSD", "0"))
+                total_invested = parse_float(plan.get("totalInvestedInUSD", "0"))
+                plan_value = parse_float(plan.get("planValueInUSD", "0"))
                 print(
                     f"- planId {plan_id}: {status} | {source_asset} -> {target_asset} | "
                     f"{subscription_amount} per {subscription_cycle} | next: {next_execution} | "
@@ -244,12 +322,12 @@ def main():
                     print("  Plan assets:")
                     for detail in details:
                         target = detail.get("targetAsset", "N/A")
-                        avg_price = parse_decimal(detail.get("averagePriceInUSD", "0"))
-                        total_invested_asset = parse_decimal(detail.get("totalInvestedInUSD", "0"))
+                        avg_price = parse_float(detail.get("averagePriceInUSD", "0"))
+                        total_invested_asset = parse_float(detail.get("totalInvestedInUSD", "0"))
                         purchased = detail.get("purchasedAmount", "N/A")
                         purchased_unit = detail.get("purchasedAmountUnit", "N/A")
-                        pnl = parse_decimal(detail.get("pnlInUSD", "0"))
-                        roi = Decimal(str(detail.get("roi", "0"))) if detail.get("roi") is not None else Decimal(0)
+                        pnl = parse_float(detail.get("pnlInUSD", "0"))
+                        roi = parse_float(detail.get("roi", "0")) if detail.get("roi") is not None else 0.0
                         percent = detail.get("percentage", "N/A")
                         asset_status = detail.get("assetStatus", "N/A")
                         print(
