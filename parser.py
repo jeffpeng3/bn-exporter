@@ -12,6 +12,7 @@ API_KEY = os.getenv("BINANCE_API_KEY")
 API_SECRET = os.getenv("BINANCE_API_SECRET")
 DEFAULT_QUOTE = "USDT"
 PRICE_BRIDGES = ("USDT", "BUSD", "USDC", "BTC", "ETH", "BNB")
+# PRICE_BRIDGES 是用來當作間接換匯的橋樑資產，當沒有直接交易對時會嘗試透過這些資產計算價格。
 
 
 def parse_decimal(value):
@@ -36,7 +37,7 @@ def build_price_map(client):
 
 def normalize_asset(asset):
     if asset == "RWUSD":
-        return "USD"
+        return "USDC"
     if asset.startswith("LD") and len(asset) > 2:
         return asset[2:]
     return asset
@@ -46,9 +47,7 @@ def quote_price(asset, quote_asset, prices):
     asset = normalize_asset(asset)
 
     if asset == "USD":
-        if quote_asset in {"USD", "USDT", "BUSD", "USDC"}:
-            return Decimal(1)
-        return quote_price("USDT", quote_asset, prices)
+        return quote_price("USDC", quote_asset, prices)
 
     if asset == quote_asset:
         return Decimal(1)
