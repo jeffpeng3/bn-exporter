@@ -253,12 +253,7 @@ def convert_btc_snapshot(snapshot_btc: object, quote_asset: str, prices: dict[st
 
 
 def main():
-    parser = argparse.ArgumentParser(description="輸出 Binance 帳戶總餘額 (預設 USDT)。")
-    parser.add_argument(
-        "--quote",
-        default=os.getenv("BN_TOTAL_QUOTE", DEFAULT_QUOTE),
-        help="要計算的目標計價資產，預設 USDT。",
-    )
+    parser = argparse.ArgumentParser(description="輸出 Binance 帳戶總餘額 (USDT)。")
     parser.add_argument(
         "--detail",
         action="store_true",
@@ -266,7 +261,7 @@ def main():
     )
 
     args = parser.parse_args()
-    quote_asset = args.quote.upper()
+    quote_asset = DEFAULT_QUOTE
 
     client = load_client()
     prices = build_price_map(client)
