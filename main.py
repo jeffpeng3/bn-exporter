@@ -5,13 +5,12 @@ from aiohttp import web
 from prometheus_client import Gauge
 from prometheus_client.aiohttp import make_aiohttp_handler
 
-import parser as bnparser
+from parser import Binance
 
 load_dotenv()
 
 BALANCE_TOTAL = Gauge("binance_balance_total_usdt", "Total Binance account balance in USDT")
 BALANCE_ASSET = Gauge("binance_balance_asset_usdt", "Binance asset value in USDT", ["asset"])
-BALANCE_MISSING = Gauge("binance_balance_asset_price_missing", "Whether an asset price is missing", ["asset"])
 AUTO_INVEST_ACTIVE_PLANS = Gauge("binance_auto_invest_active_plans", "Number of active Binance auto-invest plans")
 AUTO_INVEST_PLAN_VALUE = Gauge("binance_auto_invest_plan_value_usd", "Auto-invest plan current value in USD", ["plan_id"])
 AUTO_INVEST_PLAN_INVESTED = Gauge("binance_auto_invest_plan_invested_usd", "Auto-invest plan total invested in USD", ["plan_id"])
@@ -26,7 +25,6 @@ app = web.Application()
 app.router.add_get("/metrics", make_aiohttp_handler())
 
 LAST_BALANCE_ASSETS = set()
-LAST_MISSING_ASSETS = set()
 LAST_PLAN_IDS = set()
 LAST_PLAN_ASSETS = set()
 
@@ -38,12 +36,13 @@ def parse_float(value):
         return 0.0
 
 
-def update_metrics():
-    client = bnparser.load_client()
-    prices = bnparser.build_price_map(client)
-    balances = bnparser.load_balances(client)
+binance = Binance()
 
-    total_value, rows, missing = bnparser.calculate_total_value(balances, prices, "USDT")
+
+def update_metrics():
+    balances = binance.get_balances()
+
+    total_value, rows = binance.calculate_total_value(balances)
     BALANCE_TOTAL.set(total_value)
 
     current_balance_assets = set()
@@ -59,20 +58,7 @@ def update_metrics():
     LAST_BALANCE_ASSETS.clear()
     LAST_BALANCE_ASSETS.update(current_balance_assets)
 
-    current_missing_assets = set()
-    for asset in missing:
-        BALANCE_MISSING.labels(asset=asset).set(1)
-        current_missing_assets.add(asset)
-
-    for old_asset in LAST_MISSING_ASSETS - current_missing_assets:
-        try:
-            BALANCE_MISSING.remove(old_asset)
-        except KeyError:
-            pass
-    LAST_MISSING_ASSETS.clear()
-    LAST_MISSING_ASSETS.update(current_missing_assets)
-
-    plans, _ = bnparser.load_auto_invest_status(client)
+    plans, _ = binance.load_auto_invest_status()
     current_plan_ids = set()
     current_plan_assets = set()
 
@@ -86,7 +72,7 @@ def update_metrics():
             AUTO_INVEST_PLAN_PNL.labels(plan_id=plan_id).set(parse_float(plan.get("pnlInUSD")))
             AUTO_INVEST_PLAN_ROI.labels(plan_id=plan_id).set(parse_float(plan.get("roi")))
 
-            details = bnparser.load_auto_invest_plan_details(client, plan.get("planId"))
+            details = binance.load_auto_invest_plan_details(plan.get("planId"))
             for detail in details:
                 asset_label = detail.get("targetAsset", "unknown")
                 current_plan_assets.add((plan_id, asset_label))
