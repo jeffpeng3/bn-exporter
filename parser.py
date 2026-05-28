@@ -49,11 +49,11 @@ class Binance:
 
     def get_earn_balances(self) -> dict[str, float]:
         earns = [
-            self.client.get_simple_earn_flexible_product_position,
-            self.client.get_simple_earn_locked_product_position,
+            (self.client.get_simple_earn_flexible_product_position, "totalAmount"),
+            (self.client.get_simple_earn_locked_product_position, "amount"),
         ]
         ret = defaultdict(float)
-        for earn_func in earns:
+        for earn_func, amount_key in earns:
             for page in range(1, 1000):
                 response = earn_func(current=page, size=API_PAGE_SIZE)
                 page_rows = response.get("rows", [])
@@ -61,7 +61,8 @@ class Binance:
                     break
                 for item in page_rows:
                     asset = item["asset"]
-                    total_amount = float(item["totalAmount"])
+                    print(item)
+                    total_amount = float(item[amount_key])
                     ret[asset] += total_amount
                 total = int(response.get("total", "0"))
                 if page * API_PAGE_SIZE >= total:
