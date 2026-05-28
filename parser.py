@@ -61,7 +61,6 @@ class Binance:
                     break
                 for item in page_rows:
                     asset = item["asset"]
-                    print(item)
                     total_amount = float(item[amount_key])
                     ret[asset] += total_amount
                 total = int(response.get("total", "0"))
